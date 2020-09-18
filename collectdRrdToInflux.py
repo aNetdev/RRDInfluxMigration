@@ -1,12 +1,7 @@
-#!/usr/bin/python
-# -*- coding: utf-8 -*-
-
 import sys,getopt
 import re
 import os
 import rrdtool
-import xml.etree.ElementTree as ET
-import pprint
 from influxdb import InfluxDBClient
 
 
@@ -35,9 +30,8 @@ def main(argv):
 		print('	-d, --database		Database name where to store data.')
 		print('	-U, --user		Optional. Database user.')
 		print('	-P, --password		Optional. Database password.')
-		print('	-D, --device		Device the RRD metrics are related with.')
 	try:
-		opts, args = getopt.getopt(argv,"humf:H:p:d:U:P:k:D:",["help=","update=","dump=","file=","host=","port=","database=","user=","password=","key=","device="])
+		opts, args = getopt.getopt(argv,"hf:H:p:d:U:P:",["help=","folder=","host=","port=","database=","user=","password="])
 	except getopt.GetoptError as err:
 		help()
 		sys.exit(2)
@@ -57,11 +51,9 @@ def main(argv):
 		elif opt in ("-U", "--user"):
 			user = arg
 		elif opt in ("-P", "--password"):
-			password = arg		
-		elif opt in ("-D", "--device"):
-			device = arg
+			password = arg			
 
-	if device == "" or dir == "" or db == "":
+	if dir == "" or db == "":
 		print("ERROR: Missing or duplicated parameters.")
 		help()
 		sys.exit(2)
@@ -71,37 +63,44 @@ def main(argv):
 
 	for host in os.listdir(dir):
 		for measure in os.listdir(os.path.join(dir,host)):
+			measure_split = measure.split("-")
 			for fileName in os.listdir(os.path.join(dir,host,measure)):
 				fname =os.path.join(dir,host,measure,fileName)
+				measure=measure_split[0]
 				print(fname)
 				if os.path.isfile(fname):
 					t = re.sub('\.rrd$','',fileName)
-					split =t.split("-")
-					t=split[0]
-
+					type_split =t.split("-")
+					t=type_split[0]
 					allvalues = rrdtool.fetch(
 						fname,
 						"AVERAGE",
-						'-e', str(rrdtool.last(fname)-RRD_MIN_RES),
-						'-r', str(RRD_MIN_RES))
+						'-s', str(rrdtool.first(fname)),
+						'-e', str(rrdtool.last(fname)))
 					i=0
+					start, end, step = allvalues[0]
 					while i < len(allvalues[2]):
 						val=allvalues[2][i][0]
-						unixts=allvalues[0][0]+(i+1)*RRD_MIN_RES
-						json_body = [
-							{
-								"measurement": measure + "_value",
-								"time": unixts,
-								"fields": {
-									"host":device,
-									"type":t,									
-									"value": val
-								}
-							}							
-						]
-						if(len(split)>1):
-							json_body[0]["fields"]["type_instance"]=split[1]
-						client.write_points(json_body)
+						if (val != None):
+							unixts=start + (step * 1+i)
+							json_body = [
+								{
+									"measurement": measure + "_value",
+									"time": unixts,
+									"tags":{
+										"host":host,
+										"type":t,			
+									},
+									"fields": {															
+										"value": val
+									}
+								}							
+							]
+							if(len(measure_split)>1):
+								json_body[0]["tags"]["instance"]=measure_split[1]
+							if(len(type_split)>1):
+								json_body[0]["tags"]["type_instance"]=type_split[1]
+							client.write_points(json_body, time_precision ="s", batch_size=10000)
 						i=i+1
 
 
